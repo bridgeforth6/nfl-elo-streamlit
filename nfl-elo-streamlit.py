@@ -65,23 +65,19 @@ def load_historical_data(start_year, end_year):
         for team in team_data['Team']:
             try:
                 game_log = t.get_team_game_log(team=team, season=year)
-                
-                if game_log is None or game_log.empty:
+                if game_log.empty:
                     st.warning(f"No data available for {team} in {year}. Skipping...")
                     continue
+                # Convert columns to the appropriate types to prevent type-related errors
+                game_log['points_for'] = pd.to_numeric(game_log['points_for'], errors='coerce')
+                game_log['points_allowed'] = pd.to_numeric(game_log['points_allowed'], errors='coerce')
+                game_log['week'] = pd.to_numeric(game_log['week'], errors='coerce')
                 
-                # Ensure the expected columns exist in the DataFrame
-                required_columns = ['opp', 'points_for', 'points_allowed', 'week']
-                if not all(col in game_log.columns for col in required_columns):
-                    st.warning(f"Missing required columns for {team} in {year}. Skipping...")
-                    continue
-
                 for _, game in game_log.iterrows():
-                    # Check if individual values are present and valid
+                    # Check if required fields exist before proceeding
                     if pd.isna(game['opp']) or pd.isna(game['points_for']) or pd.isna(game['points_allowed']) or pd.isna(game['week']):
-                        st.warning(f"Incomplete data for {team} in week {game['week']} of {year}. Skipping this game.")
                         continue
-
+                    
                     team_a = team
                     team_b = game['opp']
                     points_for = game['points_for']
@@ -145,4 +141,82 @@ if st.button("Calculate Elo Ratings from Historical Data"):
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
 
     st.success("Ratings Updated from Historical Data!")
+    st.table(st.session_state['team_data'])
+
+# Load current season data
+@st.cache_data
+def load_current_season_data(season_year, week):
+    current_season_data = pd.DataFrame()
+    matchup_tracker = set()  # Track matchups to avoid duplicates
+
+    for team in team_data['Team']:
+        try:
+            game_log = t.get_team_game_log(team=team, season=season_year)
+            if game_log.empty:
+                st.warning(f"No data available for {team} in {season_year}. Skipping...")
+                continue
+            # Convert columns to appropriate types to prevent type-related errors
+            game_log['points_for'] = pd.to_numeric(game_log['points_for'], errors='coerce')
+            game_log['points_allowed'] = pd.to_numeric(game_log['points_allowed'], errors='coerce')
+            game_log['week'] = pd.to_numeric(game_log['week'], errors='coerce')
+            
+            for _, game in game_log.iterrows():
+                if pd.isna(game['opp']) or pd.isna(game['points_for']) or pd.isna(game['points_allowed']) or pd.isna(game['week']):
+                    continue
+
+                if game['week'] <= week:
+                    team_a = team
+                    team_b = game['opp']
+                    matchup = tuple(sorted([team_a, team_b, season_year, game['week']]))
+                    if matchup not in matchup_tracker:
+                        matchup_tracker.add(matchup)
+                        current_season_data = pd.concat([current_season_data, pd.DataFrame([{
+                            'team_a': team_a,
+                            'team_b': team_b,
+                            'points_for': game['points_for'],
+                            'points_allowed': game['points_allowed'],
+                            'home_team': game.get('home_team', False),
+                            'week': game['week'],
+                            'year': season_year
+                        }])], ignore_index=True)
+        except Exception as e:
+            st.warning(f"Error fetching data for {team} in {season_year}, week {week}: {e}. Skipping...")
+    return current_season_data
+
+# Load current season data based on user-selected week
+if 'current_season_data' not in st.session_state or st.session_state['current_season_week'] != selected_week:
+    st.session_state['current_season_data'] = load_current_season_data(2023, selected_week)
+    st.session_state['current_season_week'] = selected_week
+current_season_data = st.session_state['current_season_data']
+
+# Display Elo ratings for the current season based on user-selected week
+st.subheader("Elo Ratings for the Current Season (Week {})".format(selected_week))
+if st.button("Calculate Elo Ratings for Current Season"):
+    for index, game in current_season_data.iterrows():
+        team_a = game['team_a']
+        team_b = game['team_b']
+        try:
+            rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
+            rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+        except IndexError:
+            st.warning(f"Missing ratings for one of the teams: {team_a} or {team_b}. Skipping this game.")
+            continue
+
+        # Determine the result based on points scored
+        if game['points_for'] > game['points_allowed']:
+            result_a = 1  # Team A wins
+        elif game['points_for'] < game['points_allowed']:
+            result_a = 0  # Team B wins
+        else:
+            result_a = 0.5  # Draw
+
+        # Calculate new ratings
+        new_rating_a = calculate_elo(rating_a, rating_b, result_a)
+        new_rating_b = calculate_elo(rating_b, rating_a, 1 - result_a)
+
+        # Update the ratings in the dataframe
+        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
+        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
+
+    st.success("Ratings Updated for Current Season!")
     st.table(st.session_state['team_data'])
