@@ -26,9 +26,14 @@ def apply_season_decay(team_data, decay_rate=DECAY_RATE):
 @st.cache
 def initialize_teams():
     teams = [
-        "Kansas City Chiefs", "Green Bay Packers", "Buffalo Bills",
-        "New England Patriots", "Dallas Cowboys", "San Francisco 49ers",
-        "Los Angeles Rams", "Miami Dolphins"
+        "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
+        "Carolina Panthers", "Chicago Bears", "Cincinnati Bengals", "Cleveland Browns",
+        "Dallas Cowboys", "Denver Broncos", "Detroit Lions", "Green Bay Packers",
+        "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars", "Kansas City Chiefs",
+        "Las Vegas Raiders", "Los Angeles Chargers", "Los Angeles Rams", "Miami Dolphins",
+        "Minnesota Vikings", "New England Patriots", "New Orleans Saints", "New York Giants",
+        "New York Jets", "Philadelphia Eagles", "Pittsburgh Steelers", "San Francisco 49ers",
+        "Seattle Seahawks", "Tampa Bay Buccaneers", "Tennessee Titans", "Washington Commanders"
     ]
     return pd.DataFrame({
         'Team': teams,
@@ -46,33 +51,56 @@ st.title("NFL Team Elo Ratings")
 st.subheader("Current Elo Ratings")
 st.table(team_data)
 
-# Simulate game results
-st.subheader("Enter Game Results")
+# Load historical game data (you can replace this with your actual data source)
+@st.cache
+def load_historical_data():
+    # Placeholder for loading real historical data, replace with actual file path or data retrieval
+    data = {
+        'team': ["Buffalo Bills", "Buffalo Bills", "Kansas City Chiefs", "Kansas City Chiefs"],
+        'opp': ["New England Patriots", "Miami Dolphins", "Denver Broncos", "Las Vegas Raiders"],
+        'home_team': [True, False, True, False],
+        'points_for': [21, 14, 35, 24],
+        'points_allowed': [17, 20, 28, 24],
+        'year': [2022, 2022, 2022, 2022]
+    }
+    return pd.DataFrame(data)
 
-team_a = st.selectbox("Select Team A", team_data['Team'])
-team_b = st.selectbox("Select Team B", team_data['Team'])
-result = st.selectbox("Select Result", ["Team A Wins", "Team B Wins", "Draw"])
+historical_data = load_historical_data()
 
-# Calculate and update ratings
-if st.button("Calculate New Elo Ratings"):
-    rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
-    rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
-    
-    if result == "Team A Wins":
-        new_rating_a = calculate_elo(rating_a, rating_b, 1)
-        new_rating_b = calculate_elo(rating_b, rating_a, 0)
-    elif result == "Team B Wins":
-        new_rating_a = calculate_elo(rating_a, rating_b, 0)
-        new_rating_b = calculate_elo(rating_b, rating_a, 1)
-    else:  # Draw
-        new_rating_a = calculate_elo(rating_a, rating_b, 0.5)
-        new_rating_b = calculate_elo(rating_b, rating_a, 0.5)
+# Remove duplicate matchups
+historical_data['matchup'] = historical_data.apply(lambda row: tuple(sorted([row['team'], row['opp']])), axis=1)
+historical_data = historical_data.drop_duplicates(subset=['year', 'matchup'])
 
-    # Update the ratings in the dataframe
-    team_data.loc[team_data['Team'] == team_a, 'Rating'] = new_rating_a
-    team_data.loc[team_data['Team'] == team_b, 'Rating'] = new_rating_b
+# Display current Elo ratings
+st.subheader("Current Elo Ratings")
+st.table(team_data)
 
-    st.success("Ratings Updated!")
+# Calculate Elo ratings based on historical data
+st.subheader("Update Elo Ratings from Historical Data")
+if st.button("Calculate Elo Ratings from Historical Data"):
+    for index, game in historical_data.iterrows():
+        team_a = game['team']
+        team_b = game['opp']
+        rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
+        rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+
+        # Determine the result based on points scored
+        if game['points_for'] > game['points_allowed']:
+            result_a = 1  # Team A wins
+        elif game['points_for'] < game['points_allowed']:
+            result_a = 0  # Team B wins
+        else:
+            result_a = 0.5  # Draw
+
+        # Calculate new ratings
+        new_rating_a = calculate_elo(rating_a, rating_b, result_a)
+        new_rating_b = calculate_elo(rating_b, rating_a, 1 - result_a)
+
+        # Update the ratings in the dataframe
+        team_data.loc[team_data['Team'] == team_a, 'Rating'] = new_rating_a
+        team_data.loc[team_data['Team'] == team_b, 'Rating'] = new_rating_b
+
+    st.success("Ratings Updated from Historical Data!")
     st.table(team_data)
 
 # Apply Elo rating decay at the start of a new season
