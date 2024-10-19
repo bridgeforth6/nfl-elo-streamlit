@@ -23,6 +23,7 @@ def apply_season_decay(team_data, decay_rate=DECAY_RATE):
     return team_data
 
 # Initialize data for teams
+@st.cache_data
 def initialize_teams():
     teams = [
         "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
@@ -40,18 +41,20 @@ def initialize_teams():
         'Year': [INITIAL_YEAR] * len(teams)
     })
 
-# Initialize or load team data in session state
+# Load team data
 if 'team_data' not in st.session_state:
     st.session_state['team_data'] = initialize_teams()
+team_data = st.session_state['team_data']
 
 # Streamlit UI
 st.title("NFL Team Elo Ratings")
 
 # Display current Elo ratings
 st.subheader("Current Elo Ratings")
-st.table(st.session_state['team_data'])
+st.table(team_data)
 
 # Load historical game data (you can replace this with your actual data source)
+@st.cache_data
 def load_historical_data():
     # Placeholder for loading real historical data, replace with actual file path or data retrieval
     data = {
@@ -64,11 +67,17 @@ def load_historical_data():
     }
     return pd.DataFrame(data)
 
-historical_data = load_historical_data()
+if 'historical_data' not in st.session_state:
+    st.session_state['historical_data'] = load_historical_data()
+historical_data = st.session_state['historical_data']
 
 # Remove duplicate matchups
 historical_data['matchup'] = historical_data.apply(lambda row: tuple(sorted([row['team'], row['opp']])), axis=1)
 historical_data = historical_data.drop_duplicates(subset=['year', 'matchup'])
+
+# Display current Elo ratings
+st.subheader("Current Elo Ratings")
+st.table(team_data)
 
 # Calculate Elo ratings based on historical data
 st.subheader("Update Elo Ratings from Historical Data")
@@ -76,8 +85,8 @@ if st.button("Calculate Elo Ratings from Historical Data"):
     for index, game in historical_data.iterrows():
         team_a = game['team']
         team_b = game['opp']
-        rating_a = st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'].values[0]
-        rating_b = st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'].values[0]
+        rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
+        rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
 
         # Determine the result based on points scored
         if game['points_for'] > game['points_allowed']:
@@ -91,19 +100,19 @@ if st.button("Calculate Elo Ratings from Historical Data"):
         new_rating_a = calculate_elo(rating_a, rating_b, result_a)
         new_rating_b = calculate_elo(rating_b, rating_a, 1 - result_a)
 
-        # Update the ratings in the session state dataframe
+        # Update the ratings in the dataframe
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
 
     st.success("Ratings Updated from Historical Data!")
-    st.table(st.session_state['team_data'])
+    st.table(team_data)
 
 # Apply Elo rating decay at the start of a new season
 st.subheader("Start a New Season")
 if st.button("Apply Elo Decay for New Season"):
     st.session_state['team_data'] = apply_season_decay(st.session_state['team_data'])
     st.success("Elo ratings have been adjusted for the new season!")
-    st.table(st.session_state['team_data'])
+    st.table(team_data)
 
 # Save the team data (if you wish to persist data across sessions)
 # You could also use session state, a database, or a file
