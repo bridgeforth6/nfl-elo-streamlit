@@ -65,12 +65,19 @@ def load_historical_data(start_year, end_year):
         for team in team_data['Team']:
             try:
                 game_log = t.get_team_game_log(team=team, season=year)
+                if game_log.empty:
+                    st.warning(f"No data available for {team} in {year}. Skipping...")
+                    continue
                 for _, game in game_log.iterrows():
+                    # Check if required fields exist before proceeding
+                    if 'opp' not in game or 'points_for' not in game or 'points_allowed' not in game or 'week' not in game:
+                        continue
+                    
                     team_a = team
                     team_b = game['opp']
                     points_for = game['points_for']
                     points_allowed = game['points_allowed']
-                    home_team = game['home_team']
+                    home_team = game.get('home_team', False)
                     week = game['week']
 
                     # Create a sorted matchup tuple to track unique games
@@ -87,7 +94,7 @@ def load_historical_data(start_year, end_year):
                             'week': week
                         }])], ignore_index=True)
             except Exception as e:
-                st.error(f"Error fetching data for {team} in {year}: {e}")
+                st.warning(f"Error fetching data for {team} in {year}: {e}. Skipping...")
     return historical_data
 
 # Get historical data for the selected range
@@ -105,8 +112,12 @@ if st.button("Calculate Elo Ratings from Historical Data"):
     for index, game in historical_data.iterrows():
         team_a = game['team_a']
         team_b = game['team_b']
-        rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
-        rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+        try:
+            rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
+            rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+        except IndexError:
+            st.warning(f"Missing ratings for one of the teams: {team_a} or {team_b}. Skipping this game.")
+            continue
 
         # Determine the result based on points scored
         if game['points_for'] > game['points_allowed']:
@@ -136,8 +147,15 @@ def load_current_season_data(season_year, week):
     for team in team_data['Team']:
         try:
             game_log = t.get_team_game_log(team=team, season=season_year)
+            if game_log.empty:
+                st.warning(f"No data available for {team} in {season_year}. Skipping...")
+                continue
             for _, game in game_log.iterrows():
                 if game['week'] <= week:
+                    # Check if required fields exist before proceeding
+                    if 'opp' not in game or 'points_for' not in game or 'points_allowed' not in game or 'week' not in game:
+                        continue
+
                     team_a = team
                     team_b = game['opp']
                     matchup = tuple(sorted([team_a, team_b, season_year, game['week']]))
@@ -148,12 +166,12 @@ def load_current_season_data(season_year, week):
                             'team_b': team_b,
                             'points_for': game['points_for'],
                             'points_allowed': game['points_allowed'],
-                            'home_team': game['home_team'],
+                            'home_team': game.get('home_team', False),
                             'week': game['week'],
                             'year': season_year
                         }])], ignore_index=True)
         except Exception as e:
-            st.error(f"Error fetching data for {team} in {season_year}, week {week}: {e}")
+            st.warning(f"Error fetching data for {team} in {season_year}, week {week}: {e}. Skipping...")
     return current_season_data
 
 # Load current season data based on user-selected week
@@ -168,8 +186,12 @@ if st.button("Calculate Elo Ratings for Current Season"):
     for index, game in current_season_data.iterrows():
         team_a = game['team_a']
         team_b = game['team_b']
-        rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
-        rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+        try:
+            rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
+            rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
+        except IndexError:
+            st.warning(f"Missing ratings for one of the teams: {team_a} or {team_b}. Skipping this game.")
+            continue
 
         # Determine the result based on points scored
         if game['points_for'] > game['points_allowed']:
