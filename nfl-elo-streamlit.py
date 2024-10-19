@@ -154,4 +154,4 @@ if st.button("Calculate Elo Ratings for Current Season"):
 
         # Update the ratings in the dataframe
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
-        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] =
+        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
