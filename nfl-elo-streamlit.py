@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from pro_football_reference_web_scraper import team_game_log as t
 
 # Set up initial ratings and constants
 INITIAL_RATING = st.sidebar.number_input("Initial Elo Rating", min_value=1000, max_value=2000, value=1500, step=50)
@@ -53,22 +54,26 @@ st.title("NFL Team Elo Ratings")
 st.subheader("Current Elo Ratings")
 st.table(team_data)
 
-# Load historical game data (you can replace this with your actual data source)
+# Load historical game data using NFL web scraper
 @st.cache_data
-def load_historical_data():
-    # Placeholder for loading real historical data, replace with actual file path or data retrieval
-    data = {
-        'team': ["Buffalo Bills", "Buffalo Bills", "Kansas City Chiefs", "Kansas City Chiefs"],
-        'opp': ["New England Patriots", "Miami Dolphins", "Denver Broncos", "Las Vegas Raiders"],
-        'home_team': [True, False, True, False],
-        'points_for': [21, 14, 35, 24],
-        'points_allowed': [17, 20, 28, 24],
-        'year': [2022, 2022, 2022, 2022]
-    }
-    return pd.DataFrame(data)
+def load_historical_data(season_year):
+    # Fetch data using the web scraper for a specific season
+    historical_data = pd.DataFrame()
+    for team in team_data['Team']:
+        try:
+            game_log = t.get_team_game_log(team=team, season=season_year)
+            game_log['team'] = team
+            historical_data = pd.concat([historical_data, game_log], ignore_index=True)
+        except Exception as e:
+            st.error(f"Error fetching data for {team}: {e}")
+    return historical_data
 
-if 'historical_data' not in st.session_state:
-    st.session_state['historical_data'] = load_historical_data()
+# Get user input for which year to load historical data from
+selected_year = st.sidebar.number_input("Select Year for Historical Data", min_value=2000, max_value=2025, value=2022, step=1)
+
+if 'historical_data' not in st.session_state or st.session_state['historical_data_year'] != selected_year:
+    st.session_state['historical_data'] = load_historical_data(selected_year)
+    st.session_state['historical_data_year'] = selected_year
 historical_data = st.session_state['historical_data']
 
 # Remove duplicate matchups
@@ -105,14 +110,14 @@ if st.button("Calculate Elo Ratings from Historical Data"):
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
 
     st.success("Ratings Updated from Historical Data!")
-    st.table(team_data)
+    st.table(st.session_state['team_data'])
 
 # Apply Elo rating decay at the start of a new season
 st.subheader("Start a New Season")
 if st.button("Apply Elo Decay for New Season"):
     st.session_state['team_data'] = apply_season_decay(st.session_state['team_data'])
     st.success("Elo ratings have been adjusted for the new season!")
-    st.table(team_data)
+    st.table(st.session_state['team_data'])
 
 # Save the team data (if you wish to persist data across sessions)
 # You could also use session state, a database, or a file
