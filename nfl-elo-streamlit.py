@@ -59,13 +59,33 @@ selected_week = st.sidebar.slider("Select Week for Current Season", min_value=1,
 def load_historical_data(start_year, end_year):
     # Fetch data using the web scraper for all seasons in the range
     historical_data = pd.DataFrame()
+    matchup_tracker = set()  # To track unique matchups
+
     for year in range(start_year, end_year + 1):
         for team in team_data['Team']:
             try:
                 game_log = t.get_team_game_log(team=team, season=year)
-                game_log['team'] = team
-                game_log['year'] = year
-                historical_data = pd.concat([historical_data, game_log], ignore_index=True)
+                for _, game in game_log.iterrows():
+                    team_a = team
+                    team_b = game['opp']
+                    points_for = game['points_for']
+                    points_allowed = game['points_allowed']
+                    home_team = game['home_team']
+                    week = game['week']
+
+                    # Create a sorted matchup tuple to track unique games
+                    matchup = tuple(sorted([team_a, team_b, year, week]))
+                    if matchup not in matchup_tracker:
+                        matchup_tracker.add(matchup)
+                        historical_data = pd.concat([historical_data, pd.DataFrame([{
+                            'team_a': team_a,
+                            'team_b': team_b,
+                            'points_for': points_for,
+                            'points_allowed': points_allowed,
+                            'home_team': home_team,
+                            'year': year,
+                            'week': week
+                        }])], ignore_index=True)
             except Exception as e:
                 st.error(f"Error fetching data for {team} in {year}: {e}")
     return historical_data
@@ -76,10 +96,6 @@ if 'historical_data' not in st.session_state or st.session_state['historical_dat
     st.session_state['historical_data_range'] = (INITIAL_YEAR, selected_end_year)
 historical_data = st.session_state['historical_data']
 
-# Remove duplicate matchups
-historical_data['matchup'] = historical_data.apply(lambda row: tuple(sorted([row['team'], row['opp']])), axis=1)
-historical_data = historical_data.drop_duplicates(subset=['year', 'matchup'])
-
 # Display Elo ratings at the end of historical range (End of 2023)
 st.subheader("Elo Ratings at the End of Historical Data ({}-{})".format(INITIAL_YEAR, selected_end_year))
 st.table(team_data)
@@ -87,8 +103,8 @@ st.table(team_data)
 # Calculate Elo ratings based on historical data
 if st.button("Calculate Elo Ratings from Historical Data"):
     for index, game in historical_data.iterrows():
-        team_a = game['team']
-        team_b = game['opp']
+        team_a = game['team_a']
+        team_b = game['team_b']
         rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
         rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
 
@@ -115,12 +131,27 @@ if st.button("Calculate Elo Ratings from Historical Data"):
 @st.cache_data
 def load_current_season_data(season_year, week):
     current_season_data = pd.DataFrame()
+    matchup_tracker = set()  # Track matchups to avoid duplicates
+
     for team in team_data['Team']:
         try:
             game_log = t.get_team_game_log(team=team, season=season_year)
-            game_log = game_log[game_log['week'] <= week]  # Filter to the selected week
-            game_log['team'] = team
-            current_season_data = pd.concat([current_season_data, game_log], ignore_index=True)
+            for _, game in game_log.iterrows():
+                if game['week'] <= week:
+                    team_a = team
+                    team_b = game['opp']
+                    matchup = tuple(sorted([team_a, team_b, season_year, game['week']]))
+                    if matchup not in matchup_tracker:
+                        matchup_tracker.add(matchup)
+                        current_season_data = pd.concat([current_season_data, pd.DataFrame([{
+                            'team_a': team_a,
+                            'team_b': team_b,
+                            'points_for': game['points_for'],
+                            'points_allowed': game['points_allowed'],
+                            'home_team': game['home_team'],
+                            'week': game['week'],
+                            'year': season_year
+                        }])], ignore_index=True)
         except Exception as e:
             st.error(f"Error fetching data for {team} in {season_year}, week {week}: {e}")
     return current_season_data
@@ -135,8 +166,8 @@ current_season_data = st.session_state['current_season_data']
 st.subheader("Elo Ratings for the Current Season (Week {})".format(selected_week))
 if st.button("Calculate Elo Ratings for Current Season"):
     for index, game in current_season_data.iterrows():
-        team_a = game['team']
-        team_b = game['opp']
+        team_a = game['team_a']
+        team_b = game['team_b']
         rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
         rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
 
@@ -155,3 +186,6 @@ if st.button("Calculate Elo Ratings for Current Season"):
         # Update the ratings in the dataframe
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
         st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
+
+    st.success("Ratings Updated for Current Season!")
+    st.table(st.session_state['team_data'])
