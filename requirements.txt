@@ -1,3 +1,4 @@
 streamlit
 pandas
 numpy
+pro_football_reference_web_scraper
