@@ -3,6 +3,6 @@ pandas
 nfl_data_py
 openpyxl
 numpy
-sklearn
+scikit-learn
 xgboost
 catboost
