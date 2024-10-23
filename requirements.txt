@@ -5,4 +5,3 @@ openpyxl==3.1.5
 numpy>=1.20.0  # Specify a compatible version
 scikit-learn==1.5.2  # Use scikit-learn instead of sklearn
 xgboost==2.1.1
-catboost==1.1.0  # Specify a compatible version
