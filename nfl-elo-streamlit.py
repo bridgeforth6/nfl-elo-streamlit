@@ -51,7 +51,10 @@ def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
     if is_playoffs:
         elo_diff *= 1.2  # Increase weight for playoff games
     win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
-    return round(win_prob, 2)
+    return round(win_prob * 100)  # Return as percentage
+
+# In the matchups data, update this line to display percentage with '%' suffix
+'Home Win Probability': f"{win_probability}%",
 
 # Iterate over each season to calculate Elo ratings and win probabilities
 all_matchup_data = []
