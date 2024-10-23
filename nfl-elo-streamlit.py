@@ -6,7 +6,6 @@ import math
 import streamlit as st
 from sklearn.ensemble import GradientBoostingClassifier
 from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
 from sklearn.ensemble import VotingClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, brier_score_loss, classification_report
