@@ -37,12 +37,6 @@ teams = pd.concat([schedule_data['home_team'], schedule_data['away_team']]).uniq
 for team in teams:
     elo_ratings[team] = initial_elo
 
-# Remove inactive teams from Elo ratings
-inactive_teams = ['STL', 'OAK', 'SD']
-for team in inactive_teams:
-    if team in elo_ratings:
-        del elo_ratings[team]
-
 # Function to update Elo ratings based on match result and margin of victory multiplier
 def update_elo(team_elo, opponent_elo, result, point_diff, k=k_value):
     expected_score = 1 / (1 + 10 ** ((opponent_elo - team_elo) / 400))
@@ -142,6 +136,8 @@ for year in years:
 # Streamlit: Display current Elo ratings
 sorted_elo_ratings = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
 elo_df = pd.DataFrame(sorted_elo_ratings, columns=['Team', 'Elo Rating'])
+elo_df = elo_df[~elo_df['Team'].isin(['STL', 'OAK', 'SD'])]  # Remove inactive teams from current Elo ranking list
+elo_df['Elo Rating'] = elo_df['Elo Rating'].round()  # Round Elo ratings to the whole number
 elo_df.index += 1  # Start index at 1 instead of 0
 st.write("### Current Elo Ratings")
 st.dataframe(elo_df)
@@ -192,6 +188,24 @@ for _, game in current_year_matchup_data.iterrows():
             'Home QB': home_qb_name,
             'Away QB': away_qb_name,
             'Result': 'Home Win' if home_result == 1 else ('Away Win' if home_result == 0 else 'Tie')
+        })
+    else:
+        # If the game has not been played yet, predict win probability without a result
+        home_elo = elo_ratings.get(home_team, initial_elo)
+        away_elo = elo_ratings.get(away_team, initial_elo)
+        win_probability = calculate_win_probability(home_elo, away_elo)
+        current_matchup_data.append({
+            'Season': current_year,
+            'Week': game['week'],
+            'Home Team': home_team,
+            'Away Team': away_team,
+            'Home Win Probability': win_probability,
+            'Elo Difference': round(home_elo - away_elo),
+            'Divisional Game': div_game,
+            'Away Rest': away_rest,
+            'Home QB': home_qb_name,
+            'Away QB': away_qb_name,
+            'Result': 'Upcoming'
         })
 
 current_matchup_df = pd.DataFrame(current_matchup_data)
