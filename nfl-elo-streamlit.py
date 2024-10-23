@@ -141,6 +141,9 @@ st.dataframe(elo_df)
 # Streamlit: Display current matchups and win probabilities
 current_year = max(years)
 current_year_matchup_data = schedule_data[schedule_data['season'] == current_year]
+latest_week_played = current_year_matchup_data.loc[~current_year_matchup_data['home_score'].isna(), 'week'].max()
+current_year_matchup_data = current_year_matchup_data[current_year_matchup_data['week'] <= latest_week_played + 1]
+
 current_matchup_data = []
 for _, game in current_year_matchup_data.iterrows():
     home_team = game['home_team']
