@@ -1,4 +1,8 @@
 streamlit
 pandas
+nfl_data_py
+openpyxl
 numpy
-pro_football_reference_web_scraper
+sklearn
+xgboost
+catboost
