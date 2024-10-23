@@ -1,5 +1,6 @@
 streamlit==1.39.0
-pandas>=1.4.0, <2.0
+pandas==1.5.3
+statsmodels==0.13.2
 nfl_data_py==0.3.3
 openpyxl==3.1.5
 numpy>=1.20.0
