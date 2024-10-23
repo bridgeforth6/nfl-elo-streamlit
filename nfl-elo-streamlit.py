@@ -51,10 +51,7 @@ def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
     if is_playoffs:
         elo_diff *= 1.2  # Increase weight for playoff games
     win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
-    return round(win_prob * 100)  # Return as percentage
-
-# In the matchups data, update this line to display percentage with '%' suffix
-'Home Win Probability': f"{win_probability}%",
+    return round(win_prob, 2)
 
 # Iterate over each season to calculate Elo ratings and win probabilities
 all_matchup_data = []
@@ -103,7 +100,7 @@ for year in years:
             'Away Team': away_team,
             'Home Score': home_points,
             'Away Score': away_points,
-            'Home Win Probability': win_probability,
+            'Home Win Probability': f"{int(win_probability * 100)}%",
             'Elo Difference': round(home_elo - away_elo),
             'Divisional Game': div_game,
             'Away Rest': away_rest,
@@ -141,6 +138,7 @@ sorted_elo_ratings = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=Tru
 elo_df = pd.DataFrame(sorted_elo_ratings, columns=['Team', 'Elo Rating'])
 elo_df = elo_df[~elo_df['Team'].isin(['STL', 'OAK', 'SD'])]  # Remove inactive teams from current Elo ranking list
 elo_df['Elo Rating'] = elo_df['Elo Rating'].round()  # Round Elo ratings to the whole number
+elo_df = elo_df.reset_index(drop=True)  # Reset index to start from 0
 elo_df.index += 1  # Start index at 1 instead of 0
 st.write("### Current Elo Ratings")
 st.dataframe(elo_df)
@@ -184,7 +182,7 @@ for _, game in current_year_matchup_data.iterrows():
             'Away Team': away_team,
             'Home Score': home_points,
             'Away Score': away_points,
-            'Home Win Probability': win_probability,
+            'Home Win Probability': f"{int(win_probability * 100)}%",
             'Elo Difference': round(home_elo - away_elo),
             'Divisional Game': div_game,
             'Away Rest': away_rest,
@@ -202,7 +200,7 @@ for _, game in current_year_matchup_data.iterrows():
             'Week': game['week'],
             'Home Team': home_team,
             'Away Team': away_team,
-            'Home Win Probability': win_probability,
+            'Home Win Probability': f"{int(win_probability * 100)}%",
             'Elo Difference': round(home_elo - away_elo),
             'Divisional Game': div_game,
             'Away Rest': away_rest,
