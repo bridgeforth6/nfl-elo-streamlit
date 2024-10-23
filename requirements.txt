@@ -1,8 +1,8 @@
-streamlit
-pandas
-nfl_data_py
-openpyxl
-numpy
-scikit-learn
-xgboost
-catboost
+streamlit==1.39.0
+pandas==2.2.3
+nfl_data_py==0.3.3
+openpyxl==3.1.5
+numpy>=1.20.0  # Specify a compatible version
+scikit-learn==1.5.2  # Use scikit-learn instead of sklearn
+xgboost==2.1.1
+catboost==1.1.0  # Specify a compatible version
