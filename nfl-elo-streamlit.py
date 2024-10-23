@@ -1,222 +1,189 @@
-import streamlit as st
 import pandas as pd
+import nfl_data_py as nfl
+import openpyxl
 import numpy as np
-from pro_football_reference_web_scraper import team_game_log as t
+import math
+import streamlit as st
+from sklearn.ensemble import GradientBoostingClassifier
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from sklearn.ensemble import VotingClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, brier_score_loss, classification_report
+import statsmodels.api as sm
 
-# Set up initial ratings and constants
-INITIAL_RATING = st.sidebar.number_input("Initial Elo Rating", min_value=1000, max_value=2000, value=1500, step=50)
-K = st.sidebar.slider("Elo K-Factor", min_value=10, max_value=40, value=20, step=1)  # Adjust this value for more or less responsiveness
-DECAY_RATE = st.sidebar.slider("Season Elo Decay Rate", min_value=0.0, max_value=0.5, value=0.2, step=0.05)  # 20% decay towards mean rating between seasons
-INITIAL_YEAR = 2010  # Fixed initial year to start calculations from
+# Set years for analysis
+years = list(range(2010, 2025))
 
-# Function to calculate Elo ratings
-def calculate_elo(rating_a, rating_b, result_a, K=K):
-    # Expected result
-    expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
-    # New rating
-    new_rating_a = rating_a + K * (result_a - expected_a)
-    return new_rating_a
+# Streamlit app configuration
+st.title('NFL Elo Rating and Win Probability Forecaster')
 
-# Function to apply Elo decay towards the mean rating
-def apply_season_decay(team_data, decay_rate=DECAY_RATE):
-    mean_rating = team_data['Rating'].mean()
-    team_data['Rating'] = team_data['Rating'].apply(lambda x: x + decay_rate * (mean_rating - x))
-    return team_data
+# User inputs for model parameters
+initial_elo = st.sidebar.number_input('Initial Elo Rating', value=1500, min_value=1000, max_value=2000, step=50)
+reversion_factor = st.sidebar.slider('Reversion Factor at End of Season', min_value=0.0, max_value=1.0, value=0.33, step=0.01)
+k_value = st.sidebar.number_input('K Value for Elo Update', value=20, min_value=1, max_value=100, step=1)
+home_advantage = st.sidebar.number_input('Home Advantage Elo Boost', value=48, min_value=0, max_value=100, step=1)
 
-# Initialize data for teams
-@st.cache_data
-def initialize_teams():
-    teams = [
-        "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
-        "Carolina Panthers", "Chicago Bears", "Cincinnati Bengals", "Cleveland Browns",
-        "Dallas Cowboys", "Denver Broncos", "Detroit Lions", "Green Bay Packers",
-        "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars", "Kansas City Chiefs",
-        "Las Vegas Raiders", "Los Angeles Chargers", "Los Angeles Rams", "Miami Dolphins",
-        "Minnesota Vikings", "New England Patriots", "New Orleans Saints", "New York Giants",
-        "New York Jets", "Philadelphia Eagles", "Pittsburgh Steelers", "San Francisco 49ers",
-        "Seattle Seahawks", "Tampa Bay Buccaneers", "Tennessee Titans", "Washington Commanders"
-    ]
-    return pd.DataFrame({
-        'Team': teams,
-        'Rating': [INITIAL_RATING] * len(teams),
-        'Year': [INITIAL_YEAR] * len(teams)
-    })
+# Initialize Elo ratings for each team at the start
+elo_ratings = {}
 
-# Load team data
-if 'team_data' not in st.session_state:
-    st.session_state['team_data'] = initialize_teams()
-team_data = st.session_state['team_data']
+# Fetch schedule data for the specific years
+schedule_data = nfl.import_schedules(years)
 
-# Streamlit UI
-st.title("NFL Team Elo Ratings")
+# Print all available columns in the dataset
+print("Available columns in schedule data:", schedule_data.columns)
 
-# Adjustable inputs for Elo calculation range and current season
-selected_end_year = st.sidebar.number_input("End Year for Historical Data Calculation", min_value=2010, max_value=2023, value=2023, step=1)
-selected_week = st.sidebar.slider("Select Week for Current Season", min_value=1, max_value=22, value=1, step=1)
+# Initialize Elo ratings for all teams
+teams = pd.concat([schedule_data['home_team'], schedule_data['away_team']]).unique()
+for team in teams:
+    elo_ratings[team] = initial_elo
 
-# Load historical game data using NFL web scraper
-@st.cache_data
-def load_historical_data(start_year, end_year):
-    # Fetch data using the web scraper for all seasons in the range
-    historical_data = pd.DataFrame()
-    matchup_tracker = set()  # To track unique matchups
+# Function to update Elo ratings based on match result and margin of victory multiplier
+def update_elo(team_elo, opponent_elo, result, point_diff, k=k_value):
+    expected_score = 1 / (1 + 10 ** ((opponent_elo - team_elo) / 400))
+    elo_diff = abs(team_elo - opponent_elo)
+    mov_multiplier = (math.log(point_diff + 1) * 2.2) / ((elo_diff * 0.001) + 2.2)
+    new_elo = team_elo + k * mov_multiplier * (result - expected_score)
+    return new_elo
 
-    for year in range(start_year, end_year + 1):
-        for team in team_data['Team']:
-            try:
-                game_log = t.get_team_game_log(team=team, season=year)
-                if game_log.empty:
-                    st.warning(f"No data available for {team} in {year}. Skipping...")
-                    continue
-                # Convert columns to the appropriate types to prevent type-related errors
-                game_log['points_for'] = pd.to_numeric(game_log['points_for'], errors='coerce')
-                game_log['points_allowed'] = pd.to_numeric(game_log['points_allowed'], errors='coerce')
-                game_log['week'] = pd.to_numeric(game_log['week'], errors='coerce')
-                
-                for _, game in game_log.iterrows():
-                    # Check if required fields exist before proceeding
-                    if pd.isna(game['opp']) or pd.isna(game['points_for']) or pd.isna(game['points_allowed']) or pd.isna(game['week']):
-                        continue
-                    
-                    team_a = team
-                    team_b = game['opp']
-                    points_for = game['points_for']
-                    points_allowed = game['points_allowed']
-                    home_team = game.get('home_team', False)
-                    week = game['week']
+# Function to calculate win probability
+def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
+    elo_diff = home_elo + home_advantage - away_elo  # Add home_advantage Elo points to home team for home-field advantage
+    if is_playoffs:
+        elo_diff *= 1.2  # Increase weight for playoff games
+    win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
+    return win_prob
 
-                    # Create a sorted matchup tuple to track unique games
-                    matchup = tuple(sorted([team_a, team_b, year, week]))
-                    if matchup not in matchup_tracker:
-                        matchup_tracker.add(matchup)
-                        historical_data = pd.concat([historical_data, pd.DataFrame([{
-                            'team_a': team_a,
-                            'team_b': team_b,
-                            'points_for': points_for,
-                            'points_allowed': points_allowed,
-                            'home_team': home_team,
-                            'year': year,
-                            'week': week
-                        }])], ignore_index=True)
-            except Exception as e:
-                st.warning(f"Error fetching data for {team} in {year}: {e}. Skipping...")
-    return historical_data
+# Iterate over each season to calculate Elo ratings and win probabilities
+all_matchup_data = []
+for year in years:
+    # Filter data for the current year
+    yearly_data = schedule_data[schedule_data['season'] == year]
 
-# Get historical data for the selected range
-if 'historical_data' not in st.session_state or st.session_state['historical_data_range'] != (INITIAL_YEAR, selected_end_year):
-    st.session_state['historical_data'] = load_historical_data(INITIAL_YEAR, selected_end_year)
-    st.session_state['historical_data_range'] = (INITIAL_YEAR, selected_end_year)
-historical_data = st.session_state['historical_data']
+    # Create a list to store matchup data for the season
+    matchup_data = []
 
-# Display Elo ratings at the end of historical range (End of 2023)
-st.subheader("Elo Ratings at the End of Historical Data ({}-{})".format(INITIAL_YEAR, selected_end_year))
-st.table(team_data)
+    # Iterate over each game in the season
+    for _, game in yearly_data.iterrows():
+        home_team = game['home_team']
+        away_team = game['away_team']
+        home_points = game['home_score']
+        away_points = game['away_score']
+        div_game = game['div_game']
+        away_rest = game['away_rest']
+        home_qb_name = game['home_qb_name']
+        away_qb_name = game['away_qb_name']
 
-# Calculate Elo ratings based on historical data
-if st.button("Calculate Elo Ratings from Historical Data"):
-    for index, game in historical_data.iterrows():
-        team_a = game['team_a']
-        team_b = game['team_b']
-        try:
-            rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
-            rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
-        except IndexError:
-            st.warning(f"Missing ratings for one of the teams: {team_a} or {team_b}. Skipping this game.")
-            continue
-
-        # Determine the result based on points scored
-        if game['points_for'] > game['points_allowed']:
-            result_a = 1  # Team A wins
-        elif game['points_for'] < game['points_allowed']:
-            result_a = 0  # Team B wins
+        # Determine result: 1 if home team wins, 0.5 if tie, 0 if away team wins
+        if home_points > away_points:
+            home_result = 1
+        elif home_points < away_points:
+            home_result = 0
         else:
-            result_a = 0.5  # Draw
+            home_result = 0.5
 
-        # Calculate new ratings
-        new_rating_a = calculate_elo(rating_a, rating_b, result_a)
-        new_rating_b = calculate_elo(rating_b, rating_a, 1 - result_a)
+        # Update Elo ratings for both teams
+        home_elo = elo_ratings.get(home_team, initial_elo)
+        away_elo = elo_ratings.get(away_team, initial_elo)
+        point_diff = abs(home_points - away_points)
 
-        # Update the ratings in the dataframe
-        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
-        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
+        # Check if the game is a playoff game (week 19 or later)
+        is_playoffs = game['week'] >= 19
 
-    st.success("Ratings Updated from Historical Data!")
-    st.table(st.session_state['team_data'])
+        # Calculate win probability for the home team
+        win_probability = calculate_win_probability(home_elo, away_elo, is_playoffs=is_playoffs)
 
-# Load current season data
-@st.cache_data
-def load_current_season_data(season_year, week):
-    current_season_data = pd.DataFrame()
-    matchup_tracker = set()  # Track matchups to avoid duplicates
+        # Store matchup data
+        matchup_data.append({
+            'Season': year,
+            'Week': game['week'],
+            'Home Team': home_team,
+            'Away Team': away_team,
+            'Home Score': home_points,
+            'Away Score': away_points,
+            'Home Win Probability': win_probability,
+            'Elo Difference': home_elo - away_elo,
+            'Divisional Game': div_game,
+            'Away Rest': away_rest,
+            'Home QB': home_qb_name,
+            'Away QB': away_qb_name,
+            'Result': 'Home Win' if home_result == 1 else ('Away Win' if home_result == 0 else 'Tie')
+        })
 
-    for team in team_data['Team']:
-        try:
-            game_log = t.get_team_game_log(team=team, season=season_year)
-            if game_log.empty:
-                st.warning(f"No data available for {team} in {season_year}. Skipping...")
-                continue
-            # Convert columns to appropriate types to prevent type-related errors
-            game_log['points_for'] = pd.to_numeric(game_log['points_for'], errors='coerce')
-            game_log['points_allowed'] = pd.to_numeric(game_log['points_allowed'], errors='coerce')
-            game_log['week'] = pd.to_numeric(game_log['week'], errors='coerce')
-            
-            for _, game in game_log.iterrows():
-                if pd.isna(game['opp']) or pd.isna(game['points_for']) or pd.isna(game['points_allowed']) or pd.isna(game['week']):
-                    continue
+        # Update Elo ratings
+        if not np.isnan(home_points) and not np.isnan(away_points):
+            elo_ratings[home_team] = update_elo(home_elo, away_elo, home_result, point_diff)
+            elo_ratings[away_team] = update_elo(away_elo, home_elo, 1 - home_result, point_diff)
 
-                if game['week'] <= week:
-                    team_a = team
-                    team_b = game['opp']
-                    matchup = tuple(sorted([team_a, team_b, season_year, game['week']]))
-                    if matchup not in matchup_tracker:
-                        matchup_tracker.add(matchup)
-                        current_season_data = pd.concat([current_season_data, pd.DataFrame([{
-                            'team_a': team_a,
-                            'team_b': team_b,
-                            'points_for': game['points_for'],
-                            'points_allowed': game['points_allowed'],
-                            'home_team': game.get('home_team', False),
-                            'week': game['week'],
-                            'year': season_year
-                        }])], ignore_index=True)
-        except Exception as e:
-            st.warning(f"Error fetching data for {team} in {season_year}, week {week}: {e}. Skipping...")
-    return current_season_data
+    # Calculate the mean Elo rating for the end of the season
+    elo_mean = sum(elo_ratings.values()) / len(elo_ratings)
 
-# Load current season data based on user-selected week
-if 'current_season_data' not in st.session_state or st.session_state['current_season_week'] != selected_week:
-    st.session_state['current_season_data'] = load_current_season_data(2023, selected_week)
-    st.session_state['current_season_week'] = selected_week
-current_season_data = st.session_state['current_season_data']
+    # Revert Elo ratings towards the mean at the end of the season
+    for team in elo_ratings:
+        elo_ratings[team] = elo_ratings[team] - ((elo_ratings[team] - elo_mean) * reversion_factor)
 
-# Display Elo ratings for the current season based on user-selected week
-st.subheader("Elo Ratings for the Current Season (Week {})".format(selected_week))
-if st.button("Calculate Elo Ratings for Current Season"):
-    for index, game in current_season_data.iterrows():
-        team_a = game['team_a']
-        team_b = game['team_b']
-        try:
-            rating_a = team_data.loc[team_data['Team'] == team_a, 'Rating'].values[0]
-            rating_b = team_data.loc[team_data['Team'] == team_b, 'Rating'].values[0]
-        except IndexError:
-            st.warning(f"Missing ratings for one of the teams: {team_a} or {team_b}. Skipping this game.")
-            continue
+    # Save the final Elo ratings for the season to an Excel file
+    season_data = pd.DataFrame({'Team': list(elo_ratings.keys()), 'Elo Rating': list(elo_ratings.values()), 'Season': year})
+    season_data.to_excel(f'elo_ratings_{year}.xlsx', index=False, engine='openpyxl')
 
-        # Determine the result based on points scored
-        if game['points_for'] > game['points_allowed']:
-            result_a = 1  # Team A wins
-        elif game['points_for'] < game['points_allowed']:
-            result_a = 0  # Team B wins
+    # Save the matchup data for the season to an Excel file
+    matchup_df = pd.DataFrame(matchup_data)
+    matchup_df.to_excel(f'matchups_{year}.xlsx', index=False, engine='openpyxl')
+
+    # Append to all matchup data for accuracy analysis
+    all_matchup_data.extend(matchup_data)
+
+# Streamlit: Display current Elo ratings
+sorted_elo_ratings = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
+elo_df = pd.DataFrame(sorted_elo_ratings, columns=['Team', 'Elo Rating'])
+st.write("### Current Elo Ratings")
+st.dataframe(elo_df)
+
+# Streamlit: Display current matchups and win probabilities
+current_year = max(years)
+current_year_matchup_data = schedule_data[schedule_data['season'] == current_year]
+current_matchup_data = []
+for _, game in current_year_matchup_data.iterrows():
+    home_team = game['home_team']
+    away_team = game['away_team']
+    home_points = game['home_score']
+    away_points = game['away_score']
+    div_game = game['div_game']
+    away_rest = game['away_rest']
+    home_qb_name = game['home_qb_name']
+    away_qb_name = game['away_qb_name']
+
+    # Determine result: 1 if home team wins, 0.5 if tie, 0 if away team wins
+    if not np.isnan(home_points) and not np.isnan(away_points):
+        if home_points > away_points:
+            home_result = 1
+        elif home_points < away_points:
+            home_result = 0
         else:
-            result_a = 0.5  # Draw
+            home_result = 0.5
 
-        # Calculate new ratings
-        new_rating_a = calculate_elo(rating_a, rating_b, result_a)
-        new_rating_b = calculate_elo(rating_b, rating_a, 1 - result_a)
+        # Calculate win probability for the home team
+        home_elo = elo_ratings.get(home_team, initial_elo)
+        away_elo = elo_ratings.get(away_team, initial_elo)
+        win_probability = calculate_win_probability(home_elo, away_elo)
 
-        # Update the ratings in the dataframe
-        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_a, 'Rating'] = new_rating_a
-        st.session_state['team_data'].loc[st.session_state['team_data']['Team'] == team_b, 'Rating'] = new_rating_b
+        # Store matchup data
+        current_matchup_data.append({
+            'Season': current_year,
+            'Week': game['week'],
+            'Home Team': home_team,
+            'Away Team': away_team,
+            'Home Score': home_points,
+            'Away Score': away_points,
+            'Home Win Probability': win_probability,
+            'Elo Difference': home_elo - away_elo,
+            'Divisional Game': div_game,
+            'Away Rest': away_rest,
+            'Home QB': home_qb_name,
+            'Away QB': away_qb_name,
+            'Result': 'Home Win' if home_result == 1 else ('Away Win' if home_result == 0 else 'Tie')
+        })
 
-    st.success("Ratings Updated for Current Season!")
-    st.table(st.session_state['team_data'])
+current_matchup_df = pd.DataFrame(current_matchup_data)
+st.write("### Current Matchups and Win Probabilities")
+st.dataframe(current_matchup_df[['Week', 'Home Team', 'Away Team', 'Home Win Probability', 'Result']])
