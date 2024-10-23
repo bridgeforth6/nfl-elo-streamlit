@@ -37,6 +37,12 @@ teams = pd.concat([schedule_data['home_team'], schedule_data['away_team']]).uniq
 for team in teams:
     elo_ratings[team] = initial_elo
 
+# Remove inactive teams from Elo ratings
+inactive_teams = ['STL', 'OAK', 'SD']
+for team in inactive_teams:
+    if team in elo_ratings:
+        del elo_ratings[team]
+
 # Function to update Elo ratings based on match result and margin of victory multiplier
 def update_elo(team_elo, opponent_elo, result, point_diff, k=k_value):
     expected_score = 1 / (1 + 10 ** ((opponent_elo - team_elo) / 400))
@@ -51,7 +57,7 @@ def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
     if is_playoffs:
         elo_diff *= 1.2  # Increase weight for playoff games
     win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
-    return win_prob
+    return round(win_prob, 2)
 
 # Iterate over each season to calculate Elo ratings and win probabilities
 all_matchup_data = []
@@ -101,7 +107,7 @@ for year in years:
             'Home Score': home_points,
             'Away Score': away_points,
             'Home Win Probability': win_probability,
-            'Elo Difference': home_elo - away_elo,
+            'Elo Difference': round(home_elo - away_elo),
             'Divisional Game': div_game,
             'Away Rest': away_rest,
             'Home QB': home_qb_name,
@@ -122,11 +128,12 @@ for year in years:
         elo_ratings[team] = elo_ratings[team] - ((elo_ratings[team] - elo_mean) * reversion_factor)
 
     # Save the final Elo ratings for the season to an Excel file
-    season_data = pd.DataFrame({'Team': list(elo_ratings.keys()), 'Elo Rating': list(elo_ratings.values()), 'Season': year})
+    season_data = pd.DataFrame({'Team': list(elo_ratings.keys()), 'Elo Rating': [round(rating) for rating in elo_ratings.values()], 'Season': year})
     season_data.to_excel(f'elo_ratings_{year}.xlsx', index=False, engine='openpyxl')
 
     # Save the matchup data for the season to an Excel file
     matchup_df = pd.DataFrame(matchup_data)
+    matchup_df.index += 1  # Start index at 1 instead of 0
     matchup_df.to_excel(f'matchups_{year}.xlsx', index=False, engine='openpyxl')
 
     # Append to all matchup data for accuracy analysis
@@ -135,6 +142,7 @@ for year in years:
 # Streamlit: Display current Elo ratings
 sorted_elo_ratings = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
 elo_df = pd.DataFrame(sorted_elo_ratings, columns=['Team', 'Elo Rating'])
+elo_df.index += 1  # Start index at 1 instead of 0
 st.write("### Current Elo Ratings")
 st.dataframe(elo_df)
 
@@ -178,7 +186,7 @@ for _, game in current_year_matchup_data.iterrows():
             'Home Score': home_points,
             'Away Score': away_points,
             'Home Win Probability': win_probability,
-            'Elo Difference': home_elo - away_elo,
+            'Elo Difference': round(home_elo - away_elo),
             'Divisional Game': div_game,
             'Away Rest': away_rest,
             'Home QB': home_qb_name,
@@ -187,5 +195,6 @@ for _, game in current_year_matchup_data.iterrows():
         })
 
 current_matchup_df = pd.DataFrame(current_matchup_data)
+current_matchup_df.index += 1  # Start index at 1 instead of 0
 st.write("### Current Matchups and Win Probabilities")
 st.dataframe(current_matchup_df[['Week', 'Home Team', 'Away Team', 'Home Win Probability', 'Result']])
