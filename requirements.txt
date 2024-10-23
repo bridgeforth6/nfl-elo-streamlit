@@ -1,8 +1,17 @@
-streamlit==1.39.0
-pandas==1.5.3
-statsmodels==0.13.2
-nfl_data_py==0.3.3
-openpyxl==3.1.5
+# Core dependencies
 numpy>=1.20.0
-scikit-learn==1.5.2
-xgboost==2.1.1
+pandas>=2.0.0
+streamlit>=1.10.0
+openpyxl
+
+# Machine learning models and statistics
+scikit-learn  # This is the correct package, not 'sklearn'
+xgboost
+statsmodels
+
+# NFL Data
+nfl_data_py  # Ensure compatibility with the latest versions
+
+# Additional tools that may be needed
+matplotlib  # For data visualization if you want to add any visual plots
+seaborn  # Optional: for more complex visualizations
