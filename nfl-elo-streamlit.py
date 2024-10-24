@@ -10,6 +10,7 @@ from sklearn.ensemble import VotingClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, brier_score_loss, classification_report
 import statsmodels.api as sm
+import random
 
 # Set years for analysis
 years = list(range(2010, 2025))
@@ -31,10 +32,22 @@ if st.button('Run Calculations'):
     # Fetch schedule data for the specific years
     schedule_data = nfl.import_schedules(years)
 
+    # Print all available columns in the dataset
+    print("Available columns in schedule data:", schedule_data.columns)
+
     # Initialize Elo ratings for all teams
     teams = pd.concat([schedule_data['home_team'], schedule_data['away_team']]).unique()
     for team in teams:
         elo_ratings[team] = initial_elo
+
+    # Function to add uncertainty to the win probability
+    def add_uncertainty_to_win_prob(win_prob):
+        noise = random.uniform(-0.05, 0.05)  # Adding a random noise between -5% to +5%
+        return min(max(win_prob + noise, 0), 1)  # Ensuring win probability stays between 0 and 1
+
+    # Function to add uncertainty to home advantage
+    def add_uncertainty_to_home_advantage():
+        return home_advantage + random.uniform(-10, 10)  # Adding a random variation between -10 to +10 Elo points
 
     # Function to update Elo ratings based on match result and margin of victory multiplier
     def update_elo(team_elo, opponent_elo, result, point_diff, k=k_value):
@@ -46,11 +59,12 @@ if st.button('Run Calculations'):
 
     # Function to calculate win probability
     def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
-        elo_diff = home_elo + home_advantage - away_elo  # Add home_advantage Elo points to home team for home-field advantage
+        adjusted_home_advantage = add_uncertainty_to_home_advantage()  # Adding uncertainty to home advantage
+        elo_diff = home_elo + adjusted_home_advantage - away_elo  # Add home_advantage Elo points to home team for home-field advantage
         if is_playoffs:
             elo_diff *= 1.2  # Increase weight for playoff games
         win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
-        return round(win_prob, 2)
+        return add_uncertainty_to_win_prob(round(win_prob, 2))
 
     # Iterate over each season to calculate Elo ratings and win probabilities
     all_matchup_data = []
