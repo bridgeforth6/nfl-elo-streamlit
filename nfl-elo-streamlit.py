@@ -1,228 +1,292 @@
-import pandas as pd
-import nfl_data_py as nfl
-import openpyxl
-import numpy as np
 import math
-import streamlit as st
-from sklearn.ensemble import GradientBoostingClassifier
-from xgboost import XGBClassifier
-from sklearn.ensemble import VotingClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, brier_score_loss, classification_report
-import statsmodels.api as sm
 import random
+from datetime import datetime
 
-# Set years for analysis
-years = list(range(2010, 2025))
+import numpy as np
+import pandas as pd
+import streamlit as st
 
+import nfl_data_py as nfl
+import openpyxl  # noqa: F401  (needed by pandas Excel writer)
+
+# -----------------------------
 # Streamlit app configuration
-st.title('NFL Elo Rating and Win Probability Forecaster')
+# -----------------------------
+st.set_page_config(page_title="NFL Elo Rating & Win Prob Forecaster", layout="wide")
+st.title("NFL Elo Rating and Win Probability Forecaster")
 
-# User inputs for model parameters
-initial_elo = st.sidebar.number_input('Initial Elo Rating', value=1500, min_value=1000, max_value=2000, step=50)
-reversion_factor = st.sidebar.slider('Reversion Factor at End of Season', min_value=0.0, max_value=1.0, value=0.33, step=0.01)
-k_value = st.sidebar.number_input('K Value for Elo Update', value=20, min_value=1, max_value=100, step=1)
-home_advantage = st.sidebar.number_input('Home Advantage Elo Boost', value=48, min_value=0, max_value=100, step=1)
+# -----------------------------
+# Sidebar controls
+# -----------------------------
+initial_elo = st.sidebar.number_input(
+    "Initial Elo Rating", value=1500, min_value=1000, max_value=2000, step=50
+)
+reversion_factor = st.sidebar.slider(
+    "Reversion Factor at End of Season", min_value=0.0, max_value=1.0, value=0.33, step=0.01
+)
+k_value = st.sidebar.number_input("K Value for Elo Update", value=20, min_value=1, max_value=100, step=1)
+home_advantage = st.sidebar.number_input("Home Advantage Elo Boost", value=48, min_value=0, max_value=100, step=1)
 
-# Add a button to start the calculations
-if st.button('Run Calculations'):
-    # Initialize Elo ratings for each team at the start
-    elo_ratings = {}
+seed = st.sidebar.number_input("Random Seed (for reproducibility)", value=42, min_value=0, max_value=10_000, step=1)
+random.seed(int(seed))
+np.random.seed(int(seed))
 
-    # Fetch schedule data for the specific years
-    schedule_data = nfl.import_schedules(years)
+# Allow user to choose first season to include
+first_season = st.sidebar.number_input("First Season to Include", value=2010, min_value=1970, max_value=datetime.now().year)
 
-    # Print all available columns in the dataset
-    print("Available columns in schedule data:", schedule_data.columns)
+# -----------------------------
+# Helper: get seasons to fetch
+# -----------------------------
+def get_available_seasons(start_year: int) -> list[int]:
+    """
+    Build a season list from `start_year` through the *current* year.
+    After fetching schedules, we also clamp to the actual seasons present in the data,
+    in case the current-season schedule isn't published yet by nfl_data_py.
+    """
+    this_year = datetime.now().year
+    candidate_years = list(range(start_year, this_year + 1))
+    # Fetch schedules to confirm what's really available
+    sched = nfl.import_schedules(candidate_years)
+    if "season" not in sched.columns or sched.empty:
+        return []
+    return sorted(sched["season"].unique().tolist())
 
-    # Initialize Elo ratings for all teams
-    teams = pd.concat([schedule_data['home_team'], schedule_data['away_team']]).unique()
-    for team in teams:
-        elo_ratings[team] = initial_elo
+# -----------------------------
+# Main run
+# -----------------------------
+if st.button("Run Calculations"):
+    years = get_available_seasons(first_season)
+    if not years:
+        st.error("No schedule data available. Try lowering the first season or check your nfl_data_py installation.")
+        st.stop()
 
-    # Function to add uncertainty to the win probability
-    def add_uncertainty_to_win_prob(win_prob):
-        noise = random.uniform(-0.05, 0.05)  # Adding a random noise between -5% to +5%
-        return min(max(win_prob + noise, 0), 1)  # Ensuring win probability stays between 0 and 1
+    # Fetch confirmed seasons
+    schedule_data = nfl.import_schedules(years).copy()
 
-    # Function to add uncertainty to home advantage
-    def add_uncertainty_to_home_advantage():
-        return home_advantage + random.uniform(-10, 10)  # Adding a random variation between -10 to +10 Elo points
+    # Normalize some expected columns (older years can be quirky)
+    expected_cols = [
+        "season", "week", "game_type", "home_team", "away_team",
+        "home_score", "away_score", "div_game", "away_rest",
+        "home_qb_name", "away_qb_name"
+    ]
+    missing = [c for c in expected_cols if c not in schedule_data.columns]
+    if missing:
+        st.warning(f"Some expected columns are missing in schedule data: {missing}")
 
-    # Function to update Elo ratings based on match result and margin of victory multiplier
-    def update_elo(team_elo, opponent_elo, result, point_diff, k=k_value):
-        expected_score = 1 / (1 + 10 ** ((opponent_elo - team_elo) / 400))
-        elo_diff = abs(team_elo - opponent_elo)
-        mov_multiplier = (math.log(point_diff + 1) * 2.2) / ((elo_diff * 0.001) + 2.2)
-        new_elo = team_elo + k * mov_multiplier * (result - expected_score)
-        return new_elo
+    # Show what we actually have (collapsed by default)
+    with st.expander("Available columns in schedule data"):
+        st.write(sorted(schedule_data.columns.tolist()))
 
-    # Function to calculate win probability
-    def calculate_win_probability(home_elo, away_elo, is_playoffs=False):
-        adjusted_home_advantage = add_uncertainty_to_home_advantage()  # Adding uncertainty to home advantage
-        elo_diff = home_elo + adjusted_home_advantage - away_elo  # Add home_advantage Elo points to home team for home-field advantage
+    # Initialize Elo ratings
+    elo_ratings: dict[str, float] = {}
+    teams = pd.concat([schedule_data["home_team"], schedule_data["away_team"]]).dropna().unique()
+    for t in teams:
+        elo_ratings[t] = float(initial_elo)
+
+    # --- Uncertainty helpers ---
+    def add_uncertainty_to_win_prob(win_prob: float) -> float:
+        noise = random.uniform(-0.05, 0.05)  # ±5%
+        return min(max(win_prob + noise, 0.0), 1.0)
+
+    def add_uncertainty_to_home_advantage() -> float:
+        return float(home_advantage) + random.uniform(-10, 10)
+
+    # --- Elo math helpers ---
+    def update_elo(team_elo: float, opp_elo: float, result: float, point_diff: float, k: float = float(k_value)) -> float:
+        expected_score = 1.0 / (1.0 + 10.0 ** ((opp_elo - team_elo) / 400.0))
+        # MOV multiplier from FiveThirtyEight-style approach
+        elo_diff = abs(team_elo - opp_elo)
+        mov_multiplier = (math.log(point_diff + 1.0) * 2.2) / ((elo_diff * 0.001) + 2.2)
+        return team_elo + k * mov_multiplier * (result - expected_score)
+
+    def calculate_win_probability(home_elo: float, away_elo: float, is_playoffs: bool = False) -> float:
+        adjusted_home = add_uncertainty_to_home_advantage()
+        elo_diff = home_elo + adjusted_home - away_elo
         if is_playoffs:
-            elo_diff *= 1.2  # Increase weight for playoff games
-        win_prob = 1 / (1 + 10 ** (-elo_diff / 400))
-        return add_uncertainty_to_win_prob(round(win_prob, 2))
+            elo_diff *= 1.2  # weight playoffs slightly higher
+        win_prob = 1.0 / (1.0 + 10.0 ** (-elo_diff / 400.0))
+        return add_uncertainty_to_win_prob(round(float(win_prob), 2))
 
-    # Iterate over each season to calculate Elo ratings and win probabilities
-    all_matchup_data = []
+    # -----------------------------
+    # Process each season
+    # -----------------------------
+    all_matchup_rows: list[dict] = []
+
     for year in years:
-        # Filter data for the current year
-        yearly_data = schedule_data[schedule_data['season'] == year]
+        yearly = schedule_data[schedule_data["season"] == year].sort_values(["week"]).copy()
+        matchup_rows: list[dict] = []
 
-        # Create a list to store matchup data for the season
-        matchup_data = []
+        for _, game in yearly.iterrows():
+            home_team = game.get("home_team")
+            away_team = game.get("away_team")
+            home_points = game.get("home_score")
+            away_points = game.get("away_score")
+            div_game = game.get("div_game", False)
+            away_rest = game.get("away_rest", np.nan)
+            home_qb_name = game.get("home_qb_name", None)
+            away_qb_name = game.get("away_qb_name", None)
+            game_type = str(game.get("game_type", "")).upper()
 
-        # Iterate over each game in the season
-        for _, game in yearly_data.iterrows():
-            home_team = game['home_team']
-            away_team = game['away_team']
-            home_points = game['home_score']
-            away_points = game['away_score']
-            div_game = game['div_game']
-            away_rest = game['away_rest']
-            home_qb_name = game['home_qb_name']
-            away_qb_name = game['away_qb_name']
-
-            # Determine result: 1 if home team wins, 0.5 if tie, 0 if away team wins
-            if home_points > away_points:
-                home_result = 1
-            elif home_points < away_points:
-                home_result = 0
+            # Results (1=home win, 0.5=tie, 0=away win) only if both scores present
+            have_scores = (pd.notna(home_points) and pd.notna(away_points))
+            if have_scores:
+                if home_points > away_points:
+                    home_result = 1.0
+                elif home_points < away_points:
+                    home_result = 0.0
+                else:
+                    home_result = 0.5
+                point_diff = abs(float(home_points) - float(away_points))
             else:
-                home_result = 0.5
+                home_result = None
+                point_diff = 0.0
 
-            # Update Elo ratings for both teams
-            home_elo = elo_ratings.get(home_team, initial_elo)
-            away_elo = elo_ratings.get(away_team, initial_elo)
-            point_diff = abs(home_points - away_points)
+            home_elo = float(elo_ratings.get(home_team, initial_elo))
+            away_elo = float(elo_ratings.get(away_team, initial_elo))
 
-            # Check if the game is a playoff game (week 19 or later)
-            is_playoffs = game['week'] >= 19
-
-            # Calculate win probability for the home team
+            is_playoffs = (game_type == "POST")
             win_probability = calculate_win_probability(home_elo, away_elo, is_playoffs=is_playoffs)
 
-            # Store matchup data
-            matchup_data.append({
-                'Season': year,
-                'Week': game['week'],
-                'Home Team': home_team,
-                'Away Team': away_team,
-                'Home Score': home_points,
-                'Away Score': away_points,
-                'Home Win Probability': f"{int(win_probability * 100)}%",
-                'Elo Difference': round(home_elo - away_elo),
-                'Divisional Game': div_game,
-                'Away Rest': away_rest,
-                'Home QB': home_qb_name,
-                'Away QB': away_qb_name,
-                'Result': 'Home Win' if home_result == 1 else ('Away Win' if home_result == 0 else 'Tie')
-            })
+            # Save matchup row
+            row = {
+                "Season": year,
+                "Week": game.get("week"),
+                "Game Type": game_type,
+                "Home Team": home_team,
+                "Away Team": away_team,
+                "Home Score": home_points,
+                "Away Score": away_points,
+                "Home Win Probability": f"{int(win_probability * 100)}%",
+                "Elo Difference": round(home_elo - away_elo),
+                "Divisional Game": div_game,
+                "Away Rest": away_rest,
+                "Home QB": home_qb_name,
+                "Away QB": away_qb_name,
+                "Result": (
+                    "Home Win" if (home_result == 1.0) else
+                    ("Away Win" if (home_result == 0.0) else ("Tie" if (home_result == 0.5) else "Upcoming"))
+                ),
+            }
+            matchup_rows.append(row)
 
-            # Update Elo ratings
-            if not np.isnan(home_points) and not np.isnan(away_points):
+            # Update Elo if we have a finished game
+            if have_scores:
                 elo_ratings[home_team] = update_elo(home_elo, away_elo, home_result, point_diff)
-                elo_ratings[away_team] = update_elo(away_elo, home_elo, 1 - home_result, point_diff)
+                elo_ratings[away_team] = update_elo(away_elo, home_elo, 1.0 - home_result, point_diff)
 
-        # Calculate the mean Elo rating for the end of the season
-        elo_mean = sum(elo_ratings.values()) / len(elo_ratings)
+        # Revert to mean at end of season
+        if elo_ratings:
+            elo_mean = sum(elo_ratings.values()) / len(elo_ratings)
+            for t in elo_ratings:
+                elo_ratings[t] = elo_ratings[t] - ((elo_ratings[t] - elo_mean) * float(reversion_factor))
 
-        # Revert Elo ratings towards the mean at the end of the season
-        for team in elo_ratings:
-            elo_ratings[team] = elo_ratings[team] - ((elo_ratings[team] - elo_mean) * reversion_factor)
+        # Persist season outputs (optional but kept from your original)
+        season_df = pd.DataFrame({
+            "Team": list(elo_ratings.keys()),
+            "Elo Rating": [round(r) for r in elo_ratings.values()],
+            "Season": year
+        })
+        try:
+            season_df.to_excel(f"elo_ratings_{year}.xlsx", index=False, engine="openpyxl")
+        except Exception as e:
+            st.warning(f"Could not write elo_ratings_{year}.xlsx: {e}")
 
-        # Save the final Elo ratings for the season to an Excel file
-        season_data = pd.DataFrame({'Team': list(elo_ratings.keys()), 'Elo Rating': [round(rating) for rating in elo_ratings.values()], 'Season': year})
-        season_data.to_excel(f'elo_ratings_{year}.xlsx', index=False, engine='openpyxl')
+        matchup_df = pd.DataFrame(matchup_rows)
+        matchup_df.index += 1
+        try:
+            matchup_df.to_excel(f"matchups_{year}.xlsx", index=False, engine="openpyxl")
+        except Exception as e:
+            st.warning(f"Could not write matchups_{year}.xlsx: {e}")
 
-        # Save the matchup data for the season to an Excel file
-        matchup_df = pd.DataFrame(matchup_data)
-        matchup_df.index += 1  # Start index at 1 instead of 0
-        matchup_df.to_excel(f'matchups_{year}.xlsx', index=False, engine='openpyxl')
+        all_matchup_rows.extend(matchup_rows)
 
-        # Append to all matchup data for accuracy analysis
-        all_matchup_data.extend(matchup_data)
+    # -----------------------------
+    # Display current Elo ratings
+    # -----------------------------
+    sorted_elo = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
+    elo_df = pd.DataFrame(sorted_elo, columns=["Team", "Elo Rating"])
+    # Filter franchise codes that no longer exist in schedules
+    inactive_codes = {"STL", "OAK", "SD"}  # can expand if you see others
+    elo_df = elo_df[~elo_df["Team"].isin(inactive_codes)].copy()
+    elo_df["Elo Rating"] = elo_df["Elo Rating"].round()
+    elo_df = elo_df.reset_index(drop=True)
+    elo_df.index += 1
 
-    # Streamlit: Display current Elo ratings
-    sorted_elo_ratings = sorted(elo_ratings.items(), key=lambda x: x[1], reverse=True)
-    elo_df = pd.DataFrame(sorted_elo_ratings, columns=['Team', 'Elo Rating'])
-    elo_df = elo_df[~elo_df['Team'].isin(['STL', 'OAK', 'SD'])]  # Remove inactive teams from current Elo ranking list
-    elo_df['Elo Rating'] = elo_df['Elo Rating'].round()  # Round Elo ratings to the whole number
-    elo_df = elo_df.reset_index(drop=True)  # Reset index to start from 0
-    elo_df.index += 1  # Start index at 1 instead of 0
-    st.write("### Current Elo Ratings")
-    st.dataframe(elo_df)
+    st.subheader("Current Elo Ratings")
+    st.dataframe(elo_df, use_container_width=True)
 
-    # Streamlit: Display current matchups and win probabilities
-    current_year = max(years)
-    current_year_matchup_data = schedule_data[schedule_data['season'] == current_year]
-    latest_week_played = current_year_matchup_data.loc[~current_year_matchup_data['home_score'].isna(), 'week'].max()
-    current_year_matchup_data = current_year_matchup_data[current_year_matchup_data['week'] <= latest_week_played + 1]
+    # -----------------------------
+    # Display current season matchups (played + upcoming)
+    # -----------------------------
+    current_season = int(schedule_data["season"].max())
+    this_season = schedule_data[schedule_data["season"] == current_season].copy()
 
-    current_matchup_data = []
-    for _, game in current_year_matchup_data.iterrows():
-        home_team = game['home_team']
-        away_team = game['away_team']
-        home_points = game['home_score']
-        away_points = game['away_score']
-        div_game = game['div_game']
-        away_rest = game['away_rest']
-        home_qb_name = game['home_qb_name']
-        away_qb_name = game['away_qb_name']
+    # latest completed week if any
+    played_mask = (this_season["home_score"].notna() & this_season["away_score"].notna())
+    latest_week_played = this_season.loc[played_mask, "week"].max()
 
-        # Determine result: 1 if home team wins, 0.5 if tie, 0 if away team wins
-        if not np.isnan(home_points) and not np.isnan(away_points):
+    # If no games have been played yet (e.g., preseason done but Week 1 pending),
+    # show Week 1; otherwise show up to next week after the last completed one.
+    if pd.isna(latest_week_played):
+        show_up_to_week = this_season["week"].min()
+    else:
+        show_up_to_week = int(latest_week_played) + 1
+
+    to_show = this_season[this_season["week"] <= show_up_to_week].copy().sort_values(["week"])
+
+    current_rows = []
+    for _, game in to_show.iterrows():
+        home_team = game.get("home_team")
+        away_team = game.get("away_team")
+        home_points = game.get("home_score")
+        away_points = game.get("away_score")
+        div_game = game.get("div_game", False)
+        away_rest = game.get("away_rest", np.nan)
+        home_qb_name = game.get("home_qb_name", None)
+        away_qb_name = game.get("away_qb_name", None)
+        game_type = str(game.get("game_type", "")).upper()
+
+        home_elo = float(elo_ratings.get(home_team, initial_elo))
+        away_elo = float(elo_ratings.get(away_team, initial_elo))
+        is_playoffs = (game_type == "POST")
+        win_probability = calculate_win_probability(home_elo, away_elo, is_playoffs=is_playoffs)
+
+        have_scores = (pd.notna(home_points) and pd.notna(away_points))
+        if have_scores:
             if home_points > away_points:
-                home_result = 1
+                result = "Home Win"
             elif home_points < away_points:
-                home_result = 0
+                result = "Away Win"
             else:
-                home_result = 0.5
-
-            # Calculate win probability for the home team
-            home_elo = elo_ratings.get(home_team, initial_elo)
-            away_elo = elo_ratings.get(away_team, initial_elo)
-            win_probability = calculate_win_probability(home_elo, away_elo)
-
-            # Store matchup data
-            current_matchup_data.append({
-                'Season': current_year,
-                'Week': game['week'],
-                'Home Team': home_team,
-                'Away Team': away_team,
-                'Home Score': home_points,
-                'Away Score': away_points,
-                'Home Win Probability': f"{int(win_probability * 100)}%",
-                'Elo Difference': round(home_elo - away_elo),
-                'Divisional Game': div_game,
-                'Away Rest': away_rest,
-                'Home QB': home_qb_name,
-                'Away QB': away_qb_name,
-                'Result': 'Home Win' if home_result == 1 else ('Away Win' if home_result == 0 else 'Tie')
-            })
+                result = "Tie"
         else:
-            # If the game has not been played yet, predict win probability without a result
-            home_elo = elo_ratings.get(home_team, initial_elo)
-            away_elo = elo_ratings.get(away_team, initial_elo)
-            win_probability = calculate_win_probability(home_elo, away_elo)
-            current_matchup_data.append({
-                'Season': current_year,
-                'Week': game['week'],
-                'Home Team': home_team,
-                'Away Team': away_team,
-                'Home Win Probability': f"{int(win_probability * 100)}%",
-                'Elo Difference': round(home_elo - away_elo),
-                'Divisional Game': div_game,
-                'Away Rest': away_rest,
-                'Home QB': home_qb_name,
-                'Away QB': away_qb_name,
-                'Result': 'Upcoming'
-            })
+            result = "Upcoming"
 
-    current_matchup_df = pd.DataFrame(current_matchup_data)
-    current_matchup_df.index += 1  # Start index at 1 instead of 0
-    st.write("### Current Matchups and Win Probabilities")
-    st.dataframe(current_matchup_df[['Week', 'Home Team', 'Away Team', 'Home Win Probability', 'Result']])
+        current_rows.append({
+            "Season": current_season,
+            "Week": game.get("week"),
+            "Game Type": game_type,
+            "Home Team": home_team,
+            "Away Team": away_team,
+            "Home Win Probability": f"{int(win_probability * 100)}%",
+            "Elo Difference": round(home_elo - away_elo),
+            "Divisional Game": div_game,
+            "Away Rest": away_rest,
+            "Home QB": home_qb_name,
+            "Away QB": away_qb_name,
+            "Result": result
+        })
+
+    current_matchup_df = pd.DataFrame(current_rows)
+    current_matchup_df.index += 1
+
+    st.subheader(f"Current Season ({current_season}) Matchups & Win Probabilities")
+    st.dataframe(
+        current_matchup_df[["Week", "Game Type", "Home Team", "Away Team", "Home Win Probability", "Result"]],
+        use_container_width=True
+    )
+
+    st.caption(
+        "Tip: If you still see last year’s season at the top, try clearing the cache or restarting the app. "
+        "This version automatically targets the most recent season available in nfl_data_py."
+    )
