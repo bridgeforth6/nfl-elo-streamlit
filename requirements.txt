@@ -1,17 +1,17 @@
 # Core dependencies
-numpy>=1.20.0
+numpy>=1.21.0
 pandas>=2.0.0
-streamlit>=1.10.0
+streamlit>=1.25.0
 openpyxl
 
 # Machine learning models and statistics
-scikit-learn  # This is the correct package, not 'sklearn'
-xgboost
-statsmodels
+scikit-learn>=1.2.0
+xgboost>=1.7.0
+statsmodels>=0.14.0
 
 # NFL Data
-nfl_data_py  # Ensure compatibility with the latest versions
+nfl_data_py>=0.3.0
 
-# Additional tools that may be needed
-matplotlib  # For data visualization if you want to add any visual plots
-seaborn  # Optional: for more complex visualizations
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
